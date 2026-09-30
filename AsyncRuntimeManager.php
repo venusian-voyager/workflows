@@ -36,8 +36,4 @@ class AsyncRuntimeManager extends Manager
         return new LoopRuntime($this->vessel->make(Loop::class));
     }
 
-    protected function createIsolatedDriver(): AsyncRuntime
-    {
-        return LoopRuntime::isolated();
-    }
 }

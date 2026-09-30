@@ -5,6 +5,12 @@ namespace Voyager\Workflows\Runtimes;
 use Closure;
 use Throwable;
 use Voyager\IOPools\EventLoop;
+use Voyager\IOPools\LoopWaiter;
+use Voyager\IOPools\ResourceRegistry;
+use Voyager\IOPools\Waiter\EpollWaiterBackend;
+use Voyager\IOPools\Waiter\KqueueWaiterBackend;
+use Voyager\IOPools\Waiter\StreamSelectWaiterBackend;
+use Voyager\IOPools\PromiseEngines\GuzzlePromiseEngine;
 use Voyager\Contracts\IOPools\Loop;
 use Voyager\Contracts\IOPools\Promise;
 use Voyager\Contracts\Workflows\AsyncRuntime;
@@ -16,12 +22,34 @@ use Voyager\Contracts\Workflows\AsyncRuntime;
  */
 class LoopRuntime implements AsyncRuntime
 {
+    /** The standalone loop's pace, the same as the app loop's default. */
+    private const int PACE_NS = 16_000_000;
+
+    private static ?self $standalone = null;
+
     public function __construct(private readonly Loop $loop) {}
 
-    /** A runtime on a loop nobody else shares: scripts, tests, a node run bare. */
-    public static function isolated(): static
+    /**
+     * For code running with no app: a node in a unit test, a script. One loop per process, built
+     * from IOPools' own parts (the best waiter backend this machine has, and the Guzzle promise
+     * engine), since everything async has to run on the one loop that can turn it.
+     */
+    public static function standalone(): self
     {
-        return new static(new EventLoop);
+        if (is_null(self::$standalone)) {
+            $registry = new ResourceRegistry();
+            $backend = match (true) {
+                extension_loaded('epoll') => new EpollWaiterBackend(),
+                extension_loaded('kqueue') => new KqueueWaiterBackend(),
+                default => new StreamSelectWaiterBackend(),
+            };
+
+            self::$standalone = new self(new EventLoop(
+                $registry, new LoopWaiter($registry, $backend, self::PACE_NS), new GuzzlePromiseEngine(),
+            ));
+        }
+
+        return self::$standalone;
     }
 
     public function loop(): Loop
